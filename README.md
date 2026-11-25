@@ -67,8 +67,10 @@ while the text encoder was converted. Nothing crashed. Close what you can for th
 ```
 git clone https://github.com/Rusya13/8gb-image-lab
 cd 8gb-image-lab
-run.bat
+.\run.bat
 ```
+
+Or open the folder in Explorer and double-click `run.bat`. (In PowerShell the `.\` in front is needed.)
 
 `run.bat` makes a private Python environment in `.venv`, installs the exact package versions
 in `requirements.lock` (about 3 GB), and opens http://127.0.0.1:8188. Pick a model and press
