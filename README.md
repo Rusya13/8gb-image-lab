@@ -72,6 +72,10 @@ cd 8gb-image-lab
 
 Or open the folder in Explorer and double-click `run.bat`. (In PowerShell the `.\` in front is needed.)
 
+Clone it into a short folder such as `C:\demo`. Some of PyTorch's files sit deep inside
+`.venv`, and in a long folder path the install fails with "No such file or directory"
+(Windows' 260-character path limit).
+
 `run.bat` makes a private Python environment in `.venv`, installs the exact package versions
 in `requirements.lock` (about 3 GB), and opens http://127.0.0.1:8188. Pick a model and press
 Generate. The first picture with a model takes a long time: the download, then a few minutes
