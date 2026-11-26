@@ -16,25 +16,26 @@ modern image models". The numbers below were measured on one RTX 3070. Yours wil
 ## Measured numbers
 
 Qwen-Image 2.1 Turbo (8 steps), RTX 3070 8 GB, 16 GB DDR4-3200, Ryzen 5 5600X, Windows 11,
-driver 621.24. Other programs closed; 1.1 GB of graphics memory in use before the app started.
-25 November 2026. "Time" is the app's "Done in" figure.
+driver 621.24. A browser open, other programs closed; 0.8 GB of graphics memory in use before
+the app started. 26 November 2026. "Time" is the app's "Done in" figure.
 
 | Run | Time | Graphics memory peak |
 |---|---|---|
-| Loading the model (first picture after starting the app) | 31–34 s, before the picture | — |
-| New picture, 1024 x 1024, new prompt (7 prompts) | 33–38 s | 6.3–6.9 GB |
-| Same prompt, new seed, 1024 x 1024 (the prompt is not read again) | 18 s | 6.3 GB |
-| Same prompt, 512 x 512 / 768 x 768 | 4.6 s / 9.9 s | 6.4–6.5 GB |
-| Same prompt, 1344 x 768 / 768 x 1344 / 1344 x 1344 | 18 s / 18 s / 33 s | 6.7–6.8 GB |
-| Edit, 768 x 768 (3 edits) | 134–138 s | 8.1 GB, small spill into system RAM |
-| Edit, 1024 x 1024 (3 edits) | 207–209 s | 8.0 GB |
+| Loading the model (first picture after starting the app) | about 19 s, before the picture | — |
+| New picture, 1024 x 1024, new prompt (7 prompts) | 38–41 s | 6.2–6.9 GB |
+| Same prompt, new seed, 1024 x 1024 (the prompt is not read again) | about 20 s | 6.3 GB |
+| Same prompt, 512 x 512 / 768 x 768 | 6.1 s / 12 s | 6.4–6.8 GB |
+| Same prompt, 1344 x 768 / 768 x 1344 / 1344 x 1344 | 21 s / 21 s / 40 s | 6.3–6.7 GB |
+| Edit, 768 x 768 (3 edits) | 31–33 s | 7.1–7.4 GB |
+| Edit, 1024 x 1024 (3 edits) | 47–48 s | 8.0–8.1 GB, small spill into system RAM |
+| Edit, 768 x 768, with OBS recording (1.4 GB in use before) | 46 s | card full, no slowdown |
 
 All new pictures and the 768 edits came out right. At 1024 one edit (changing the text on a
-sign) did nothing and the picture came out grainy, so edit at 768.
+sign) did nothing, so edit at 768.
 
-**Other programs on the card matter a lot.** The same tests with another program holding
-3.7 GB of graphics memory in the background: new pictures 41–44 s, edits at 768 199–215 s,
-edits at 1024 344–355 s. Check "Dedicated GPU memory" in Task Manager before you start; it
+**Other programs on the card matter a lot.** An earlier version of the app, tested with
+another program holding 3.7 GB of graphics memory in the background, took 199–215 s per 768
+edit instead of 134–138 s. Check "Dedicated GPU memory" in Task Manager before you start; it
 should be under about 2 GB.
 
 **RAM is the tight part.** Making the 4-bit copies (once) needs most of the 16 GB. In the
@@ -95,7 +96,9 @@ To edit a picture, choose a file under "Picture to edit" and describe the change
 3. **A limit on its own RAM.** Reading a 13 GB model file maps it into memory. The program
    caps its own working set (between 1.2 and 2.2 GB on a 16 GB PC, depending on how much RAM is free at the start) so those pages are handed back as they
    pass through, and it writes its converted files in small pieces, flushing each one.
-4. **The VAE decodes in tiles.**
+4. **The VAE decodes in tiles** and waits in system RAM while the transformer draws.
+5. **Edits read your picture at the size of the result**, not at 1024 x 1024, and PyTorch's
+   unused memory is handed back after the first step.
 
 What happens when it does not fit: on Windows the NVIDIA driver does not stop with "out of
 memory". It moves the overflow into system RAM ("shared GPU memory") and everything runs many
@@ -128,8 +131,12 @@ pictures in `results\images`.
   (a finetune of the same decoder, same licence, 1.35 GB extra download) and then removes most of
   the remaining 16-pixel pattern with `app/degrid.py` (about 2 s per picture). On the test
   pictures the 2-pixel checker is gone and the 16-pixel grid is about 70% weaker.
-- Edits use just over 8 GB of graphics memory. If other programs hold even a few hundred MB
-  more, Windows moves several GB into system RAM and an edit can take 10 minutes instead of 2.
+- Edits: the picture being edited is read at the size of the result (the pipeline's default
+  is 1024 x 1024 whatever the output size) and its data stays on the card through all the
+  steps. Before this, a 768 edit needed just over 8 GB and took 2 minutes, or 10 to 15 minutes
+  with a screen recorder open.
+- Cutting the model down does not pay. Removing 4 of the transformer's 32 blocks saves 0.4 GB;
+  the first 4 give noise, the last 4 a grainy picture, any others a different picture.
 - Check each model's licence before you use its pictures for anything commercial.
 - Tested on one PC (RTX 3070, driver 621.24, Windows 11, Python 3.12). No AMD or Intel cards,
   no Linux or macOS.

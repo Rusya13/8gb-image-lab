@@ -9,7 +9,8 @@ How it fits:
   other way round to draw. That costs a few seconds per new prompt and keeps system RAM
   free. (Parking the idle part in RAM, as diffusers' model offload does, needs about 10 GB
   of RAM for Qwen-Image: too much beside a browser on a 16 GB PC.)
-- The VAE decodes in tiles.
+- The VAE decodes in tiles. Qwen-Image's VAE waits in system RAM during the steps and goes on
+  the card only to read the picture being edited and to decode the result.
 
 Nothing here is specific to one PC. Model files come from the Hugging Face cache.
 """
@@ -233,6 +234,10 @@ class Family:
     def call(self, embeds, width, height, steps, generator, image):
         raise NotImplementedError
 
+    def edit_options(self, width: int, height: int) -> dict:
+        """Extra settings for an edit at this size (passed to `encode` and `call`)."""
+        return {}
+
 
 # --- Qwen-Image 2.1 (base and Turbo) ----------------------------------------------------------
 
@@ -267,6 +272,9 @@ class Qwen(Family):
     VAE_REPO = "madebyollin/texture-fix-vae-for-qwen-image-2.1"
     VAE_REVISION = "9a10df811f183323e4e94d255c18add1924ce340"
     DEGRID = True
+    # The VAE (0.65 GB) is only used before the steps (to read the picture being edited) and after
+    # them (to decode), so it waits in system RAM while the transformer draws.
+    PARK_VAE = True
 
     def _quantise_transformer(self):
         from diffusers import QwenImage21Transformer2DModel
@@ -300,7 +308,13 @@ class Qwen(Family):
         vae = AutoencoderKLQwenImage21.from_pretrained(
             self.VAE_REPO, revision=self.VAE_REVISION, torch_dtype=BF16).to(CARD)
         vae.enable_tiling()
-        return vae
+        return _park(vae) if self.PARK_VAE else vae
+
+    def edit_options(self, width: int, height: int) -> dict:
+        # The pipeline resizes the picture being edited to 1024 x 1024's area unless told otherwise,
+        # whatever the output size. Its tokens are kept on the card through all the steps (2.1 GB
+        # for a 768 edit), so it is read at the output's size instead: 1.2 GB at 768, and faster.
+        return {"resolution": max(256, round((width * height) ** 0.5 / 32) * 32)}
 
     def _condition_images(self, image, resolution: int):
         """The reference picture resized the way the pipeline does before the text encoder sees it."""
@@ -498,6 +512,27 @@ def _attach(pipe, name: str, part) -> None:
     object.__setattr__(pipe, name, part)
 
 
+def _park(vae):
+    """Keeps the VAE in system RAM and puts it on the card only while it encodes or decodes.
+    During the steps the card then has its 0.65 GB (Qwen-Image) for the transformer's work.
+    Moving it costs a fraction of a second each way."""
+    for name in ("encode", "decode"):
+        original = getattr(vae, name)
+
+        def on_card(*args, _original=original, **kwargs):
+            vae.to(CARD)
+            try:
+                return _original(*args, **kwargs)
+            finally:
+                vae.to("cpu")
+                free_card()
+
+        setattr(vae, name, on_card)
+    vae.to("cpu")
+    free_card()
+    return vae
+
+
 def _image_key(image) -> str:
     if image is None:
         return ""
@@ -563,6 +598,11 @@ class Engine:
 
     def _after_pass(self, *_):
         self._passes += 1
+        if self._passes == self.spec.passes_per_step:
+            # The first step does the most work (with an edit it also stores the original picture's
+            # tokens for the later steps). PyTorch keeps the memory it used as free blocks that it
+            # cannot reuse well: 0.7 GB in a 768 edit. Hand it back to the card.
+            torch.cuda.empty_cache()
         self._set(step=self._passes // max(1, self.spec.passes_per_step))
 
     def load(self, key: str) -> dict:
@@ -594,6 +634,8 @@ class Engine:
             raise ValueError(f"{spec.title} cannot edit pictures")
         with self.lock:
             steps = steps or spec.steps
+            if image is not None:
+                extra = {**family.edit_options(width, height), **extra}
             self._passes = 0
             self._set(state="reading the prompt", step=0, steps=steps)
             torch.cuda.reset_peak_memory_stats()
