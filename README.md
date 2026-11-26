@@ -122,6 +122,14 @@ pictures in `results\images`.
   repository at a pinned revision. That is code from the model's authors running on your PC.
 - Model revisions are pinned in `app/engine.py`, so you get the same files that were measured.
 - 4-bit weights are not identical to the full-precision model. Pictures can differ.
+- Qwen-Image 2.1's own VAE leaves a faint grid on every picture (a 2-pixel checker and a
+  pattern every 16 pixels, visible on skin and fur), with full-precision weights too. This app
+  decodes with [madebyollin's texture-fix VAE](https://huggingface.co/madebyollin/texture-fix-vae-for-qwen-image-2.1)
+  (a finetune of the same decoder, same licence, 1.35 GB extra download) and then removes most of
+  the remaining 16-pixel pattern with `app/degrid.py` (about 2 s per picture). On the test
+  pictures the 2-pixel checker is gone and the 16-pixel grid is about 70% weaker.
+- Edits use just over 8 GB of graphics memory. If other programs hold even a few hundred MB
+  more, Windows moves several GB into system RAM and an edit can take 10 minutes instead of 2.
 - Check each model's licence before you use its pictures for anything commercial.
 - Tested on one PC (RTX 3070, driver 621.24, Windows 11, Python 3.12). No AMD or Intel cards,
   no Linux or macOS.

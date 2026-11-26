@@ -32,6 +32,7 @@ os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
 import torch
 
 from . import monitor
+from .degrid import degrid
 
 CACHE = Path(os.environ.get("EIGHTGB_CACHE", Path.home() / ".cache" / "8gb-image-lab"))
 BF16 = torch.bfloat16
@@ -257,6 +258,16 @@ class Qwen(Family):
             s.shared_repo, revision=s.shared_revision, subfolder="text_encoder",
             quantization_config=_nf4(lib="transformers"), dtype=BF16, device_map={"": 0})
 
+    # Qwen-Image 2.1's own VAE leaves a grid over every picture: a 2-pixel checker and a pattern
+    # that repeats every 16 pixels (one latent pixel), seen on skin, fur and smooth areas. It is
+    # the same with full-precision weights, so it is not caused by the 4-bit copies.
+    #  - The decoder is swapped for madebyollin's texture-fix finetune of the same VAE (same
+    #    latents, same licence), which removes the 2-pixel checker and part of the 16-pixel grid.
+    #  - app/degrid.py then removes most of what is left of the 16-pixel grid (about 2 s).
+    VAE_REPO = "madebyollin/texture-fix-vae-for-qwen-image-2.1"
+    VAE_REVISION = "9a10df811f183323e4e94d255c18add1924ce340"
+    DEGRID = True
+
     def _quantise_transformer(self):
         from diffusers import QwenImage21Transformer2DModel
 
@@ -286,9 +297,8 @@ class Qwen(Family):
     def vae(self):
         from diffusers import AutoencoderKLQwenImage21
 
-        s = self.spec
         vae = AutoencoderKLQwenImage21.from_pretrained(
-            s.shared_repo, revision=s.shared_revision, subfolder="vae", torch_dtype=BF16).to(CARD)
+            self.VAE_REPO, revision=self.VAE_REVISION, torch_dtype=BF16).to(CARD)
         vae.enable_tiling()
         return vae
 
@@ -608,6 +618,12 @@ class Engine:
                                           torch.Generator("cpu").manual_seed(seed), image, **extra)
                         torch.cuda.synchronize()
                         times["draw_s"] = time.perf_counter() - t0
+                    if out is not None and getattr(family, "DEGRID", False):
+                        # Qwen-Image 2.1's VAE leaves a faint 16-pixel grid; see app/degrid.py.
+                        self._set(state="removing the VAE grid")
+                        t0 = time.perf_counter()
+                        out = degrid(out)
+                        times["degrid_s"] = time.perf_counter() - t0
                 except torch.OutOfMemoryError as e:
                     error = f"out of memory: {str(e)[:160]}"
                     free_card()
